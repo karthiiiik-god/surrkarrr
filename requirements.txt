@@ -1,0 +1,8 @@
+streamlit
+pandas
+plotly
+sqlite3
+scikit-learn
+aiohttp
+networkx
+

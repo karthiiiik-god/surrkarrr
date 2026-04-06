@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap" args="nmap -sV -p 22,80,443 192.168.1.1" start="1638360000" startstr="Mon Dec 01 12:00:00 2021" version="7.92" xmloutputversion="1.05">
+  <host starttime="1638360000" endtime="1638360010">
+    <status state="up" reason="syn-ack" reason_ttl="64"/>
+    <address addr="192.168.1.1" addrtype="ipv4"/>
+    <hostnames>
+      <hostname name="example.com" type="PTR"/>
+    </hostnames>
+    <ports>
+      <port protocol="tcp" portid="22">
+        <state state="open" reason="syn-ack" reason_ttl="64"/>
+        <service name="ssh" product="OpenSSH" version="7.4" extrainfo="protocol 2.0" ostype="Linux" method="probed" conf="10"/>
+        <script id="vulners" output="&#xa;  cpe:/a:openbsd:openssh:7.4: &#xa;    CVE-2018-15473  5.0     https://vulners.com/cve/CVE-2018-15473&#xa;    CVE-2021-44228  10.0    https://vulners.com/cve/CVE-2021-44228&#xa;">
+          <table key="CVE-2018-15473">
+            <elem key="cvss">5.0</elem>
+            <elem key="id">CVE-2018-15473</elem>
+            <elem key="type">exploit</elem>
+            <elem key="is_exploit">false</elem>
+          </table>
+          <table key="CVE-2021-44228">
+            <elem key="cvss">10.0</elem>
+            <elem key="id">CVE-2021-44228</elem>
+            <elem key="type">exploit</elem>
+            <elem key="is_exploit">true</elem>
+          </table>
+        </script>
+      </port>
+    </ports>
+  </host>
+</nmaprun>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<NessusClientData_v2>
+  <Report name="Sample Nessus Scan" xmlns:cm="http://www.nessus.org/cm">
+    <ReportHost name="192.168.1.1">
+      <HostProperties>
+        <tag name="hostname">example.com</tag>
+        <tag name="host-ip">192.168.1.1</tag>
+      </HostProperties>
+      <ReportItem port="22" svc_name="ssh" protocol="tcp" severity="3" pluginID="10394" pluginName="OpenSSH Service Detection" pluginFamily="Service detection">
+        <description>OpenSSH is running on this port.</description>
+        <plugin_output>SSH-2.0-OpenSSH_7.4</plugin_output>
+        <cvss_base_score>0.0</cvss_base_score>
+        <risk_factor>Info</risk_factor>
+      </ReportItem>
+      <ReportItem port="80" svc_name="http" protocol="tcp" severity="2" pluginID="12345" pluginName="HTTP Server Detection" pluginFamily="Web Servers">
+        <description>Apache HTTP Server detected.</description>
+        <cvss_base_score>5.0</cvss_base_score>
+        <cve>CVE-2021-44228</cve>
+        <risk_factor>Medium</risk_factor>
+      </ReportItem>
+    </ReportHost>
+  </Report>
+</NessusClientData_v2>
