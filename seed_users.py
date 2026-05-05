@@ -1,15 +1,17 @@
+from app.pages.login import DEFAULT_BOOTSTRAP_USERS, hash_password
 from core.storage.database import Database
-from passlib.context import CryptContext
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 db = Database()
-admin_hash = pwd_context.hash("admin")
-analyst_hash = pwd_context.hash("view123")
-
-db.create_user("admin", admin_hash, "admin")
-db.create_user("analyst", analyst_hash, "analyst")
+for username, password, role, full_name in DEFAULT_BOOTSTRAP_USERS:
+    db.create_user(
+        username,
+        hash_password(password),
+        role,
+        full_name=full_name,
+        is_active=True,
+    )
 
 print("Seed users created:")
-print("Admin: admin/admin")
-print("Analyst: analyst/view123")
+for username, password, role, _ in DEFAULT_BOOTSTRAP_USERS:
+    print(f"{role.title()}: {username}/{password}")

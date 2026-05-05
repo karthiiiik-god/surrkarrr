@@ -30,7 +30,7 @@ class Vulnerability:
     nvd_description: str = ""
     risk_score: float = 0.0
     exploit_prob: float = 0.0
-    attack_path: str = ""
+    risk_path: str = ""
     references: str = ""
     remediation: str = ""
     asset_id: Optional[str] = None
@@ -55,6 +55,7 @@ class Vulnerability:
         nvd_description: str = "",
         risk_score: float = 0.0,
         exploit_prob: float = 0.0,
+        risk_path: str = "",
         attack_path: str = "",
         references: str = "",
         remediation: str = "",
@@ -79,7 +80,7 @@ class Vulnerability:
             nvd_description=nvd_description,
             risk_score=float(risk_score),
             exploit_prob=float(exploit_prob),
-            attack_path=attack_path,
+            risk_path=risk_path or attack_path,
             references=references,
             remediation=remediation,
             asset_id=asset_id,
@@ -109,14 +110,26 @@ class Vulnerability:
             nvd_description=data.get("nvd_description", ""),
             risk_score=float(data.get("risk_score", 0.0)),
             exploit_prob=float(data.get("exploit_prob", 0.0)),
-            attack_path=data.get("attack_path", ""),
+            risk_path=data.get("risk_path", data.get("attack_path", "")),
             references=data.get("reference_links", data.get("references", "")),
             remediation=data.get("remediation", ""),
             asset_id=data.get("asset_id"),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        # Preserve a legacy alias for downstream consumers that still expect
+        # the historical field name.
+        data["attack_path"] = self.risk_path
+        return data
+
+    @property
+    def attack_path(self) -> str:
+        return self.risk_path
+
+    @attack_path.setter
+    def attack_path(self, value: str) -> None:
+        self.risk_path = value
 
 
 @dataclass

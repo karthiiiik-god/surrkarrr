@@ -27,7 +27,7 @@ VULNERABILITY_COLUMNS = {
     "nvd_description": "TEXT NOT NULL DEFAULT ''",
     "risk_score": "REAL NOT NULL DEFAULT 0.0",
     "exploit_prob": "REAL NOT NULL DEFAULT 0.0",
-    "attack_path": "TEXT NOT NULL DEFAULT ''",
+    "risk_path": "TEXT NOT NULL DEFAULT ''",
     "reference_links": "TEXT NOT NULL DEFAULT ''",
     "remediation": "TEXT NOT NULL DEFAULT ''",
     "asset_id": "TEXT",
@@ -71,6 +71,7 @@ class Database:
         self.db_path = db_path
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self._table_column_cache: dict[str, set[str]] = {}
         self._initialize()
 
     def _initialize(self) -> None:
@@ -95,7 +96,7 @@ class Database:
                 nvd_description TEXT NOT NULL DEFAULT '',
                 risk_score REAL NOT NULL DEFAULT 0.0,
                 exploit_prob REAL NOT NULL DEFAULT 0.0,
-                attack_path TEXT NOT NULL DEFAULT '',
+                risk_path TEXT NOT NULL DEFAULT '',
                 reference_links TEXT NOT NULL DEFAULT '',
                 remediation TEXT NOT NULL DEFAULT '',
                 asset_id TEXT
@@ -103,6 +104,7 @@ class Database:
             """
         )
         self._migrate_table_columns("vulnerabilities", VULNERABILITY_COLUMNS)
+        self._backfill_vulnerability_compatibility_columns()
 
         self.conn.execute(
             """
@@ -213,7 +215,28 @@ class Database:
                 self.conn.execute(
                     f"ALTER TABLE {table_name} ADD COLUMN {column} {migration_sql}"
                 )
+        self._table_column_cache.pop(table_name, None)
         self.conn.commit()
+
+    def _table_columns(self, table_name: str) -> set[str]:
+        if table_name not in self._table_column_cache:
+            rows = self.conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            self._table_column_cache[table_name] = {row["name"] for row in rows}
+        return self._table_column_cache[table_name]
+
+    def _backfill_vulnerability_compatibility_columns(self) -> None:
+        columns = self._table_columns("vulnerabilities")
+        if "risk_path" in columns and "attack_path" in columns:
+            self.conn.execute(
+                """
+                UPDATE vulnerabilities
+                SET risk_path = CASE
+                    WHEN COALESCE(risk_path, '') = '' THEN COALESCE(attack_path, '')
+                    ELSE risk_path
+                END
+                """
+            )
+            self.conn.commit()
 
     def log_action(self, username: str, action: str, target: str) -> None:
         self.conn.execute(
@@ -371,41 +394,40 @@ class Database:
     def insert_vulnerability(self, vuln: Vulnerability) -> None:
         asset = self.ensure_asset(vuln.host)
         vuln.asset_id = asset.asset_id
+        column_values: dict[str, Any] = {
+            "vuln_id": vuln.vuln_id,
+            "host": vuln.host,
+            "port": int(vuln.port),
+            "service": vuln.service,
+            "vulnerability_name": vuln.vulnerability_name,
+            "description": vuln.description,
+            "cve_id": vuln.cve_id,
+            "cvss_score": float(vuln.cvss_score),
+            "severity": vuln.severity,
+            "network_exposed": int(vuln.network_exposed),
+            "authentication_required": int(vuln.authentication_required),
+            "exploit_available": int(vuln.exploit_available),
+            "source_tool": vuln.source_tool,
+            "source_tools": vuln.source_tool,
+            "timestamp": vuln.timestamp,
+            "epss_score": float(vuln.epss_score),
+            "nvd_description": vuln.nvd_description,
+            "risk_score": float(vuln.risk_score),
+            "exploit_prob": float(vuln.exploit_prob),
+            "risk_path": vuln.risk_path,
+            "attack_path": vuln.risk_path,
+            "reference_links": vuln.references,
+            "remediation": vuln.remediation,
+            "asset_id": vuln.asset_id,
+        }
+        available_columns = self._table_columns("vulnerabilities")
+        insert_columns = [column for column in column_values if column in available_columns]
+        placeholders = ", ".join("?" for _ in insert_columns)
+        column_sql = ", ".join(insert_columns)
+        values = [column_values[column] for column in insert_columns]
         self.conn.execute(
-            """
-            INSERT OR REPLACE INTO vulnerabilities (
-                vuln_id, host, port, service, vulnerability_name, description, cve_id,
-                cvss_score, severity, network_exposed, authentication_required,
-                exploit_available, source_tool, source_tools, timestamp, epss_score,
-                nvd_description, risk_score, exploit_prob, attack_path, reference_links,
-                remediation, asset_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                vuln.vuln_id,
-                vuln.host,
-                int(vuln.port),
-                vuln.service,
-                vuln.vulnerability_name,
-                vuln.description,
-                vuln.cve_id,
-                float(vuln.cvss_score),
-                vuln.severity,
-                int(vuln.network_exposed),
-                int(vuln.authentication_required),
-                int(vuln.exploit_available),
-                vuln.source_tool,
-                vuln.source_tool,
-                vuln.timestamp,
-                float(vuln.epss_score),
-                vuln.nvd_description,
-                float(vuln.risk_score),
-                float(vuln.exploit_prob),
-                vuln.attack_path,
-                vuln.references,
-                vuln.remediation,
-                vuln.asset_id,
-            ),
+            f"INSERT OR REPLACE INTO vulnerabilities ({column_sql}) VALUES ({placeholders})",
+            values,
         )
         self.conn.commit()
 

@@ -7,10 +7,11 @@ import pandas as pd
 import streamlit as st
 
 from app.pages.login import current_user, require_roles
+from app.ui import info_cards, page_hero
 from core.ml_engine.model_loader import ModelLoader
 from core.normalization.normalizer import normalize_vulnerabilities
+from core.scanner.adapters import get_scanner_adapter, list_live_adapters, list_upload_adapters
 from core.scanner.live_scanner import (
-    SCANNER_COMMANDS,
     get_scan_profiles,
     get_scanner_inventory,
     preview_scan_command,
@@ -18,18 +19,12 @@ from core.scanner.live_scanner import (
     scanner_available,
     validate_target,
 )
-from core.scanner_ingestion import nessus_parser, nikto_parser, nmap_parser, nuclei_parser, openvas_parser
 from core.storage.database import Database
 from core.storage.models import ScanJob
 
 
-SCANNER_MAPPING = {
-    "Nmap": {"parser": nmap_parser.parse_nmap, "types": ["xml"]},
-    "Nessus": {"parser": nessus_parser.parse_nessus, "types": ["nessus", "xml"]},
-    "OpenVAS": {"parser": openvas_parser.parse_openvas, "types": ["xml"]},
-    "Nikto": {"parser": nikto_parser.parse_nikto, "types": ["txt", "json"]},
-    "Nuclei": {"parser": nuclei_parser.parse_nuclei, "types": ["json", "jsonl", "txt"]},
-}
+UPLOAD_ADAPTERS = {adapter.display_name: adapter for adapter in list_upload_adapters()}
+LIVE_ADAPTERS = list_live_adapters()
 
 
 def _complete_scan_job(db: Database, scan_job: ScanJob, findings_count: int, error_message: str = "") -> None:
@@ -105,8 +100,12 @@ def _inventory_frame() -> pd.DataFrame:
 
 def show(db: Database) -> None:
     user = current_user()
-    st.title("Scan Operations")
-    st.caption("Use only against systems you are authorized to assess.")
+    page_hero(
+        "Scan Operations",
+        "Bring in external scanner artifacts or run approved live scans against authorized targets.",
+        kicker="Collection Pipeline",
+        pills=["Authorized use only", "Unified normalization", "Scan-job tracking"],
+    )
 
     if not require_roles("admin", "analyst"):
         return
@@ -116,31 +115,35 @@ def show(db: Database) -> None:
         st.subheader("Scanner Inventory")
         st.dataframe(_inventory_frame(), use_container_width=True, hide_index=True)
     with readiness_col:
-        st.subheader("Operational Notes")
-        st.write("- Upload import works without local scanners.")
-        st.write("- Live scans require the scanner binary on PATH.")
-        st.write("- Every import or scan now creates a persisted scan job record.")
+        info_cards(
+            [
+                ("Artifact Import", "Upload-based ingestion works even when local scanner binaries are unavailable."),
+                ("Live Execution", "Live scans require the corresponding scanner binary on PATH and explicit authorization confirmation."),
+                ("Auditability", "Every import or scan generates a persisted scan-job record for history and reporting."),
+            ]
+        )
 
     upload_tab, sample_tab, live_tab, history_tab = st.tabs(
         ["Upload File", "Load Sample", "Live Scan", "Scan History"]
     )
 
     with upload_tab:
-        scanner_name = st.selectbox("Scanner type", list(SCANNER_MAPPING), key="upload_scanner")
+        scanner_name = st.selectbox("Scanner type", list(UPLOAD_ADAPTERS), key="upload_scanner")
+        selected_upload_adapter = UPLOAD_ADAPTERS[scanner_name]
         target_label = st.text_input("Target label", placeholder="example.com or 192.168.1.10")
         import_tags = st.text_input("Import tags", value="artifact-import")
         uploaded_file = st.file_uploader(
             "Choose a scan artifact",
-            type=SCANNER_MAPPING[scanner_name]["types"],
+            type=list(selected_upload_adapter.upload_extensions),
         )
         if st.button("Import Uploaded Scan", type="primary", disabled=uploaded_file is None):
             try:
                 content = uploaded_file.read().decode("utf-8", errors="ignore")
                 count = _ingest_content(
                     content=content,
-                    parser=SCANNER_MAPPING[scanner_name]["parser"],
+                    parser=selected_upload_adapter.parser,
                     db=db,
-                    source_name=scanner_name,
+                    source_name=selected_upload_adapter.display_name,
                     target_label=target_label.strip() or uploaded_file.name,
                     profile="Artifact Import",
                     command=f"artifact import: {uploaded_file.name}",
@@ -164,7 +167,7 @@ def show(db: Database) -> None:
         if col1.button("Load Sample Nmap", use_container_width=True):
             count = _ingest_content(
                 content=_load_sample("sample_nmap.xml"),
-                parser=nmap_parser.parse_nmap,
+                parser=UPLOAD_ADAPTERS["Nmap"].parser,
                 db=db,
                 source_name="Nmap",
                 target_label="sample_nmap.xml",
@@ -177,7 +180,7 @@ def show(db: Database) -> None:
         if col2.button("Load Sample Nessus", use_container_width=True):
             count = _ingest_content(
                 content=_load_sample("sample_nessus.nessus"),
-                parser=nessus_parser.parse_nessus,
+                parser=UPLOAD_ADAPTERS["Nessus"].parser,
                 db=db,
                 source_name="Nessus",
                 target_label="sample_nessus.nessus",
@@ -192,7 +195,12 @@ def show(db: Database) -> None:
             st.success("All stored findings were cleared.")
 
     with live_tab:
-        scanner = st.selectbox("Live scanner", list(SCANNER_COMMANDS), key="live_scanner")
+        scanner = st.selectbox(
+            "Live scanner",
+            [adapter.display_name for adapter in LIVE_ADAPTERS],
+            key="live_scanner",
+        )
+        selected_live_adapter = get_scanner_adapter(scanner)
         available = scanner_available(scanner)
         profiles = get_scan_profiles(scanner)
         profile_name = st.selectbox("Scan profile", list(profiles), key="live_profile")
@@ -219,7 +227,7 @@ def show(db: Database) -> None:
                 st.warning(str(exc))
 
         if not available:
-            st.warning(f"{scanner} is not currently available on PATH on this machine.")
+            st.warning(f"{selected_live_adapter.display_name} is not currently available on PATH on this machine.")
 
         if st.button("Run Live Scan", type="primary", disabled=not available or not target.strip()):
             if not authorized:

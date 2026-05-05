@@ -6,6 +6,7 @@ from hashlib import sha256
 from core.ai_query.query_executor import QueryExecutor
 from core.normalization.normalizer import normalize_vulnerabilities
 from core.reporting.report_generator import generate_report
+from core.scanner.adapters import get_scanner_adapter, list_live_adapters, list_upload_adapters
 from core.scanner.live_scanner import build_scan_command, preview_scan_command, validate_target
 from core.scanner_ingestion.nessus_parser import parse_nessus
 from core.scanner_ingestion.nikto_parser import parse_nikto
@@ -40,6 +41,8 @@ class BackendSmokeTests(unittest.TestCase):
         self.assertIsNotNone(fetched)
         self.assertEqual(fetched.vuln_id, vuln.vuln_id)
         self.assertIsNotNone(fetched.asset_id)
+        self.assertTrue(fetched.risk_path)
+        self.assertEqual(fetched.attack_path, fetched.risk_path)
 
         fetched.severity = "Critical"
         self.db.update_vulnerability(fetched)
@@ -123,13 +126,16 @@ class BackendSmokeTests(unittest.TestCase):
         executor = QueryExecutor(self.db, "admin", "admin")
         filtered = executor.execute_query("Critical vulnerabilities")
         top_hosts = executor.execute_query("Top risky hosts")
-        risk_paths = executor.execute_query("Attack path for ssh")
+        risk_paths = executor.execute_query("Risk path for ssh")
         report_lookup = executor.execute_query("report summary log4j")
 
         self.assertEqual(filtered["mode"], "vulnerabilities")
         self.assertEqual(top_hosts["mode"], "hosts")
         self.assertEqual(risk_paths["mode"], "paths")
         self.assertEqual(report_lookup["mode"], "documents")
+        self.assertIn("response", filtered)
+        self.assertIn("summary", filtered["response"])
+        self.assertTrue(any(citation["source_type"] == "threat-intel" for citation in report_lookup["citations"] + filtered["citations"]))
 
     def test_scan_job_and_command_helpers(self):
         asset = self.db.ensure_asset("example.com", owner_username="admin", tags="lab")
@@ -161,6 +167,15 @@ class BackendSmokeTests(unittest.TestCase):
 
         self.assertIn("nmap", preview)
         self.assertEqual(command[0], "nikto")
+
+    def test_scanner_adapter_registry(self):
+        upload_names = {adapter.display_name for adapter in list_upload_adapters()}
+        live_names = {adapter.display_name for adapter in list_live_adapters()}
+
+        self.assertIn("Nmap", upload_names)
+        self.assertIn("Nessus", upload_names)
+        self.assertIn("Nmap", live_names)
+        self.assertEqual(get_scanner_adapter("Nmap").key, "nmap")
 
 
 if __name__ == "__main__":

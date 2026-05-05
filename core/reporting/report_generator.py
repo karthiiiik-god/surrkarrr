@@ -4,7 +4,7 @@ import json
 from io import BytesIO
 from typing import Iterable
 
-from ..risk_engine.attack_path_generator import generate_attack_paths
+from ..risk_engine.risk_path_analyzer import generate_risk_paths
 from ..storage.models import Vulnerability
 
 
@@ -18,7 +18,7 @@ def _severity_counts(vulns: list[Vulnerability]) -> dict[str, int]:
 def generate_markdown_report(vulns: list[Vulnerability]) -> str:
     severity_counts = _severity_counts(vulns)
     top_risks = sorted(vulns, key=lambda item: (item.risk_score, item.cvss_score), reverse=True)[:10]
-    risk_paths = generate_attack_paths(vulns)[:5]
+    risk_paths = generate_risk_paths(vulns)[:5]
 
     lines = [
         "# SurrKarr Vulnerability Report",
@@ -44,7 +44,10 @@ def generate_markdown_report(vulns: list[Vulnerability]) -> str:
     lines.extend(["", "## Risk Paths"])
     if risk_paths:
         for path in risk_paths:
-            lines.append(f"- {path['description']}: {' '.join(path['steps'])}")
+            lines.append(
+                f"- {path['description']} ({path['risk_level']} | {path.get('remediation_priority', 'Planned')}): "
+                f"{path.get('reasoning', '')} Recommended actions: {' '.join(path.get('recommended_actions', path.get('steps', [])))}"
+            )
     else:
         lines.append("- No multi-step risk paths identified from current data.")
 

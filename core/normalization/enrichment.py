@@ -1,33 +1,9 @@
 from __future__ import annotations
 
-from ..risk_engine.attack_path_generator import summarize_risk_path
+from ..risk_engine.risk_path_analyzer import summarize_risk_path
 from ..risk_engine.rule_based_risk import assess_risk
 from ..storage.models import Vulnerability
-
-
-STATIC_CVE_DATA = {
-    "CVE-2021-44228": {
-        "description": "Apache Log4j remote code execution exposure affecting internet-facing services.",
-        "cvss": 10.0,
-        "epss": 0.97,
-        "references": "NVD; vendor advisories",
-        "remediation": "Upgrade Log4j to a fixed version and remove vulnerable JndiLookup usage.",
-    },
-    "CVE-2018-15473": {
-        "description": "OpenSSH username enumeration issue that can support reconnaissance against SSH services.",
-        "cvss": 5.0,
-        "epss": 0.23,
-        "references": "NVD; OpenSSH advisory",
-        "remediation": "Upgrade OpenSSH and restrict unnecessary SSH exposure.",
-    },
-    "CVE-2017-0144": {
-        "description": "SMB remote code execution issue commonly known as EternalBlue.",
-        "cvss": 9.8,
-        "epss": 0.95,
-        "references": "NVD; Microsoft advisory",
-        "remediation": "Apply MS17-010, disable SMBv1, and segment exposed Windows assets.",
-    },
-}
+from .threat_intel import lookup_threat_intel, references_text
 
 
 def _default_remediation(vuln: Vulnerability) -> str:
@@ -48,12 +24,13 @@ def enrich_vulnerability(vuln: Vulnerability) -> Vulnerability:
     if vuln.cve_id:
         cve_id = vuln.cve_id.strip().upper()
         vuln.cve_id = cve_id
-        if cve_id in STATIC_CVE_DATA:
-            data = STATIC_CVE_DATA[cve_id]
+        threat_intel = lookup_threat_intel(cve_id)
+        if threat_intel:
+            data = threat_intel
             vuln.nvd_description = data["description"]
             vuln.cvss_score = max(float(vuln.cvss_score), float(data["cvss"]))
             vuln.epss_score = max(float(vuln.epss_score), float(data["epss"]))
-            vuln.references = data["references"]
+            vuln.references = references_text(data)
             vuln.remediation = data["remediation"]
 
     if not vuln.nvd_description:
@@ -63,6 +40,6 @@ def enrich_vulnerability(vuln: Vulnerability) -> Vulnerability:
     if not vuln.remediation:
         vuln.remediation = _default_remediation(vuln)
 
-    vuln.attack_path = summarize_risk_path(vuln)
+    vuln.risk_path = summarize_risk_path(vuln)
     assess_risk(vuln)
     return vuln

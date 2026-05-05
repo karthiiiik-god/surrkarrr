@@ -51,9 +51,9 @@ def parse_intent(query: str) -> dict[str, Any]:
 
     if "top risky hosts" in query_lower or "top risky assets" in query_lower:
         filters["intent"] = "top_risky_hosts"
-    elif "attack path" in query_lower:
-        service_match = re.search(r"attack path for (\w+)", query_lower)
-        filters["intent"] = "attack_path"
+    elif "risk path" in query_lower or "attack path" in query_lower:
+        service_match = re.search(r"(?:risk|attack) path for (\w+)", query_lower)
+        filters["intent"] = "risk_path"
         if service_match:
             filters["service"] = service_match.group(1)
     elif "asset" in query_lower and ("owner" in query_lower or "tag" in query_lower or "inventory" in query_lower):

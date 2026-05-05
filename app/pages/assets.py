@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from app.pages.login import current_user, role_allows
+from app.ui import page_hero, stat_tiles
 from core.storage.database import Database
 from core.storage.models import Asset
 
@@ -13,9 +14,19 @@ def show(db: Database) -> None:
     assets = db.list_assets(user["username"], user["role"])
     vulns = db.get_all_vulnerabilities(user["username"], user["role"])
     scan_jobs = db.list_scan_jobs(limit=200, username=user["username"], role=user["role"])
-
-    st.title("Asset Inventory")
-    st.caption("Track ownership, criticality, and tags for discovered or managed targets.")
+    page_hero(
+        "Asset Inventory",
+        "Track ownership, environment, criticality, and operational context for discovered or managed targets.",
+        kicker="Asset Context",
+        pills=[f"Assets {len(assets)}", f"Tracked findings {len(vulns)}", f"Scan jobs {len(scan_jobs)}"],
+    )
+    stat_tiles(
+        [
+            ("Assets", str(len(assets)), "Distinct targets available in scope."),
+            ("Scoped Findings", str(len(vulns)), "Findings currently mapped into visible assets."),
+            ("Recorded Scan Jobs", str(len(scan_jobs)), "Historical operations tied to those assets."),
+        ]
+    )
 
     asset_rows = []
     for asset in assets:

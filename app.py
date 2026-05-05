@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from app.pages import admin, ai_query, assets, dashboard, login, remediation, reports, upload_scans, vulnerability_view
+from app.ui import apply_theme, sidebar_brand
 from core.scanner.live_scanner import get_scanner_inventory
 from core.storage.database import Database
 
@@ -46,7 +47,9 @@ def main() -> None:
     st.set_page_config(
         page_title="SurrKarr",
         layout="wide",
+        initial_sidebar_state="expanded",
     )
+    apply_theme()
 
     db = Database()
     login.ensure_session_state()
@@ -58,10 +61,10 @@ def main() -> None:
 
     user = login.current_user()
     summary = db.get_summary(user["username"], user["role"])
+    inventory = get_scanner_inventory()
 
-    st.sidebar.title("SurrKarr")
-    st.sidebar.caption("Role-based vulnerability intelligence and defensive scanning.")
-    st.sidebar.success(f"{user['username']} ({user['role']})")
+    sidebar_brand(user, summary, inventory)
+    st.sidebar.success(f"Active scope: {user['username']} ({user['role']})")
     if st.sidebar.button("Logout"):
         login.logout()
 
@@ -74,13 +77,9 @@ def main() -> None:
     st.sidebar.write(f"- Assets: {summary['unique_assets']}")
     st.sidebar.write(f"- Scan jobs: {summary['scan_count']}")
     st.sidebar.write(f"- Reports: {summary['report_count']}")
-
-    st.sidebar.markdown("---")
-    st.sidebar.write("Scanner Availability")
-    inventory = pd.DataFrame(get_scanner_inventory())
-    for _, row in inventory.iterrows():
-        status = "online" if row["available"] else "offline"
-        st.sidebar.write(f"- {row['scanner']}: {status}")
+    inventory_frame = pd.DataFrame(inventory)
+    online_count = int(inventory_frame["available"].sum()) if not inventory_frame.empty else 0
+    st.sidebar.caption(f"Live scanner readiness: {online_count}/{len(inventory)} online")
 
     pages[page_name](db)
 

@@ -4,6 +4,7 @@ from hashlib import sha256
 
 import streamlit as st
 
+from app.ui import info_cards, page_hero
 from core.storage.database import Database
 
 try:
@@ -84,28 +85,64 @@ def require_roles(*allowed_roles: str) -> bool:
 
 
 def show_login_panel(db: Database) -> None:
-    st.title("SurrKarr Access Portal")
-    st.caption("Role-based access for vulnerability operations and reporting.")
+    page_hero(
+        "SurrKarr Access Portal",
+        "A bright command surface for authorized defensive scanning, grounded reporting, and vulnerability triage.",
+        kicker="Welcome",
+        pills=["Lightweight MVP", "Role-based access", "Demo ready"],
+    )
 
-    with st.expander("Bootstrap Credentials", expanded=False):
-        st.write("These are created automatically when the database has no users:")
-        for username, password, role, _ in DEFAULT_BOOTSTRAP_USERS:
-            st.write(f"- {username} / {password} ({role})")
+    left_col, right_col = st.columns([1.2, 0.9], gap="large")
+    with left_col:
+        info_cards(
+            [
+                (
+                    "What You Can Do Here",
+                    "Import scan artifacts, review normalized findings, generate risk-path analysis, and prepare remediation-focused reports.",
+                ),
+                (
+                    "Access Model",
+                    "Viewer accounts are read-only, analysts handle scan and remediation workflows, and admins manage users and platform scope.",
+                ),
+                (
+                    "Best Demo Flow",
+                    "Login, load a sample scan, open the dashboard, inspect findings, run an AI query, and finish with a saved report snapshot.",
+                ),
+            ]
+        )
 
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+        with st.expander("Bootstrap Credentials", expanded=False):
+            st.write("These are created automatically when the database has no users:")
+            for username, password, role, _ in DEFAULT_BOOTSTRAP_USERS:
+                st.write(f"- {username} / {password} ({role})")
 
-    if st.button("Login", type="primary"):
-        user = db.get_user(username)
-        if not user or not user.get("is_active"):
-            st.error("Invalid or inactive account.")
-            return
-        if verify_password(password, user["password_hash"]):
-            st.session_state["authenticated"] = True
-            st.session_state["username"] = user["username"]
-            st.session_state["user_role"] = user["role"]
-            st.session_state["full_name"] = user.get("full_name", "")
-            db.log_action(user["username"], "login", "interactive-session")
-            st.rerun()
-        else:
-            st.error("Invalid credentials")
+    with right_col:
+        st.markdown(
+            """
+            <div class="sk-shell">
+                <div class="sk-kicker">Secure Sign-In</div>
+                <h2 style="margin-top:0;">Continue to the command center</h2>
+                <p style="margin-bottom:1rem;color:#5d6d75;">
+                    Use your assigned account to enter the current assessment scope.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+
+        if st.button("Login", type="primary", use_container_width=True):
+            user = db.get_user(username)
+            if not user or not user.get("is_active"):
+                st.error("Invalid or inactive account.")
+                return
+            if verify_password(password, user["password_hash"]):
+                st.session_state["authenticated"] = True
+                st.session_state["username"] = user["username"]
+                st.session_state["user_role"] = user["role"]
+                st.session_state["full_name"] = user.get("full_name", "")
+                db.log_action(user["username"], "login", "interactive-session")
+                st.rerun()
+            else:
+                st.error("Invalid credentials")

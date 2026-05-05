@@ -5,6 +5,7 @@ import json
 import streamlit as st
 
 from app.pages.login import current_user, role_allows
+from app.ui import page_hero, stat_tiles
 from core.reporting.report_generator import generate_report
 from core.storage.database import Database
 from core.storage.models import ReportSnapshot
@@ -12,20 +13,29 @@ from core.storage.models import ReportSnapshot
 
 def show(db: Database) -> None:
     user = current_user()
-    st.title("Reports")
-
     vulns = db.get_all_vulnerabilities(user["username"], user["role"])
+    summary = db.get_summary(user["username"], user["role"])
+
+    page_hero(
+        "Reports",
+        "Generate executive-ready snapshots in markdown, PDF, or JSON from the current vulnerability scope.",
+        kicker="Communication Layer",
+        pills=[f"Findings {summary['total']}", f"Reports {summary['report_count']}", "Download ready"],
+    )
+
     if not vulns:
         st.info("No findings available for reporting.")
         return
 
-    summary = db.get_summary(user["username"], user["role"])
     scan_jobs = db.list_scan_jobs(limit=10, username=user["username"], role=user["role"])
     snapshots = db.list_report_snapshots(limit=10, username=user["username"], role=user["role"])
-
-    st.write(f"Findings in scope: {summary['total']}")
-    st.write(f"Recorded scan jobs: {summary['scan_count']}")
-    st.write(f"Saved report snapshots: {summary['report_count']}")
+    stat_tiles(
+        [
+            ("Findings", str(summary["total"]), "Items available for inclusion."),
+            ("Scan Jobs", str(summary["scan_count"]), "Recent scan activity in scope."),
+            ("Saved Reports", str(summary["report_count"]), "Snapshots stored for reuse."),
+        ]
+    )
 
     format_type = st.selectbox("Report format", ["markdown", "pdf", "json"])
     report_title = st.text_input("Report title", value="SurrKarr Security Snapshot")
