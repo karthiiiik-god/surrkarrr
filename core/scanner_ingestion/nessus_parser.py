@@ -1,70 +1,64 @@
-import xml.etree.ElementTree as ET
-from typing import List
-from ..storage.models import Vulnerability
-import uuid
-import datetime
+from __future__ import annotations
 
-def parse_nessus(xml_content: str) -> List[Vulnerability]:
-    vulnerabilities = []
+import xml.etree.ElementTree as ET
+
+from ..storage.models import Vulnerability
+
+
+def _severity_from_cvss(cvss_score: float) -> str:
+    if cvss_score >= 9.0:
+        return "Critical"
+    if cvss_score >= 7.0:
+        return "High"
+    if cvss_score >= 4.0:
+        return "Medium"
+    return "Low"
+
+
+def parse_nessus(xml_content: str) -> list[Vulnerability]:
+    vulnerabilities: list[Vulnerability] = []
     try:
         root = ET.fromstring(xml_content)
-        report = root.find('Report')
-        if report is None:
-            return vulnerabilities
-        for host_elem in report.findall('ReportHost'):
-            host = host_elem.get('name', 'unknown')
-            for item in host_elem.findall('ReportItem'):
-                port = int(item.get('port', 0))
-                svc_name = item.get('svc_name', 'unknown')
-                plugin_name = item.get('pluginName', 'Unknown Vulnerability')
-                severity_level = int(item.get('severity', 0))
-                cvss_base = item.find('cvss_base_score')
-                cvss_score = float(cvss_base.text) if cvss_base is not None and cvss_base.text else 0.0
-                if cvss_score == 0.0:
-                    # Fallback based on severity
-                    if severity_level == 4:
-                        cvss_score = 9.0
-                    elif severity_level == 3:
-                        cvss_score = 7.0
-                    elif severity_level == 2:
-                        cvss_score = 5.0
-                    elif severity_level == 1:
-                        cvss_score = 3.0
-                    else:
-                        cvss_score = 0.0
-                severity = "Low"
-                if cvss_score >= 9.0:
-                    severity = "Critical"
-                elif cvss_score >= 7.0:
-                    severity = "High"
-                elif cvss_score >= 4.0:
-                    severity = "Medium"
-                cve_elem = item.find('cve')
-                cve_id = cve_elem.text if cve_elem is not None else None
-                desc_elem = item.find('description')
-                description = desc_elem.text if desc_elem is not None else 'No description available'
-                # Enrichment fields
-                network_exposed = port in [80, 443, 22, 3389]
-                authentication_required = "auth" in description.lower()
-                exploit_available = cvss_score >= 7.0
-                if severity_level > 0:  # Skip info level
-                    vuln = Vulnerability(
-                        vuln_id=str(uuid.uuid4()),
-                        host=host,
-                        port=port,
-                        service=svc_name,
-                        vulnerability_name=plugin_name,
-                        description=description,
-                        cve_id=cve_id,
-                        cvss_score=cvss_score,
-                        severity=severity,
-                        network_exposed=network_exposed,
-                        authentication_required=authentication_required,
-                        exploit_available=exploit_available,
-                        source_tool="nessus",
-                        timestamp=datetime.datetime.now().isoformat()
-                    )
-                    vulnerabilities.append(vuln)
     except ET.ParseError:
-        pass
+        return vulnerabilities
+
+    report = root.find("Report")
+    if report is None:
+        return vulnerabilities
+
+    for host_elem in report.findall("ReportHost"):
+        host = host_elem.get("name", "unknown")
+        for item in host_elem.findall("ReportItem"):
+            severity_level = int(item.get("severity", 0))
+            if severity_level <= 0:
+                continue
+
+            port = int(item.get("port", 0))
+            service = item.get("svc_name", "unknown")
+            plugin_name = item.get("pluginName", "Unknown Vulnerability")
+            description = item.findtext("description", default="No description available")
+            cve_id = item.findtext("cve")
+            cvss_score = float(item.findtext("cvss_base_score", default="0") or 0)
+
+            if cvss_score == 0.0:
+                fallback_scores = {4: 9.0, 3: 7.0, 2: 5.0, 1: 3.0}
+                cvss_score = fallback_scores.get(severity_level, 0.0)
+
+            vulnerabilities.append(
+                Vulnerability.new(
+                    host=host,
+                    port=port,
+                    service=service,
+                    vulnerability_name=plugin_name,
+                    description=description,
+                    cve_id=cve_id,
+                    cvss_score=cvss_score,
+                    severity=_severity_from_cvss(cvss_score),
+                    source_tool="nessus",
+                    network_exposed=port in (80, 443, 22, 3389),
+                    authentication_required="auth" in description.lower(),
+                    exploit_available=cvss_score >= 7.0,
+                )
+            )
+
     return vulnerabilities

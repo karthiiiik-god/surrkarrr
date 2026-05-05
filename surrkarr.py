@@ -1,7 +1,4 @@
 import streamlit as st
-import pandas as pd
-import plotly.express as px
-import subprocess
-from core.storage.database import Database
 
-st.set_page_config (layout="wide", page_title="SurrKarr")
+st.set_page_config(page_title="SurrKarr Legacy Entrypoint", layout="wide")
+st.info("This legacy entrypoint has been retired. Run `streamlit run app.py` instead.")

@@ -1,45 +1,76 @@
-from typing import List, Dict
+from __future__ import annotations
+
+from collections import defaultdict
+from typing import Any
+
 from ..storage.models import Vulnerability
 
-def generate_attack_paths(vulns: List[Vulnerability]) -> List[Dict]:
+
+def summarize_risk_path(vuln: Vulnerability) -> str:
+    segments = []
+    if vuln.network_exposed:
+        segments.append("Internet-exposed service")
+    if vuln.cvss_score >= 9.0:
+        segments.append("critical technical weakness")
+    elif vuln.cvss_score >= 7.0:
+        segments.append("high-risk technical weakness")
+    if vuln.authentication_required:
+        segments.append("requires valid access before impact")
+    else:
+        segments.append("low-friction path to initial access")
+
+    impact = "service compromise"
+    if vuln.port in (80, 443):
+        impact = "application compromise"
+    elif vuln.port == 22:
+        impact = "administrative access risk"
+    elif vuln.port == 3389:
+        impact = "remote desktop exposure"
+
+    return f"{', '.join(segments)} could increase {impact} risk on {vuln.host}:{vuln.port}."
+
+
+def generate_attack_paths(vulns: list[Vulnerability]) -> list[dict[str, Any]]:
     """
-    Generate rule-based attack paths from vulnerabilities.
-    Returns list of paths, each with 'description' and 'steps'.
+    Defensive risk-path summaries for grouped vulnerabilities.
     """
-    paths = []
-    host_vulns = {}
+    paths: list[dict[str, Any]] = []
+    grouped: dict[str, list[Vulnerability]] = defaultdict(list)
     for vuln in vulns:
-        if vuln.host not in host_vulns:
-            host_vulns[vuln.host] = []
-        host_vulns[vuln.host].append(vuln)
+        grouped[vuln.host].append(vuln)
 
-    for host, vulns_list in host_vulns.items():
-        # Single vulnerability paths
-        for vuln in vulns_list:
-            if vuln.network_exposed and not vuln.authentication_required and vuln.exploit_available:
-                path = {
-                    "description": f"Direct exploitation of {vuln.vulnerability_name} on {host}:{vuln.port}",
-                    "steps": [f"Exploit {vuln.vulnerability_name} ({vuln.cve_id or 'No CVE'})"]
-                }
-                paths.append(path)
+    for host, host_vulns in grouped.items():
+        sorted_vulns = sorted(host_vulns, key=lambda item: (item.risk_score, item.cvss_score), reverse=True)
+        external = [item for item in sorted_vulns if item.network_exposed]
+        privileged = [item for item in sorted_vulns if item.port in (22, 3389)]
 
-        # Chained paths: e.g., exposed service -> privilege escalation
-        ssh_vulns = [v for v in vulns_list if v.port == 22 and v.network_exposed]
-        if ssh_vulns:
-            weak_ssh = any(v for v in ssh_vulns if not v.authentication_required)
-            if weak_ssh:
-                path = {
-                    "description": f"SSH compromise leading to privilege escalation on {host}",
+        if external:
+            paths.append(
+                {
+                    "description": f"External exposure on {host}",
+                    "risk_level": external[0].severity,
                     "steps": [
-                        "Exploit weak SSH configuration",
-                        "Gain initial access",
-                        "Privilege escalation to system compromise"
-                    ]
+                        "Review internet-facing services on the host.",
+                        "Patch the highest-risk exposed findings first.",
+                        "Validate segmentation and access controls after remediation.",
+                    ],
                 }
-                paths.append(path)
+            )
 
-        # Add more rules as needed, e.g., web server -> SQL injection -> data breach
+        if external and privileged:
+            paths.append(
+                {
+                    "description": f"Service exposure plus admin-plane risk on {host}",
+                    "risk_level": max(
+                        [item.severity for item in external + privileged],
+                        key=lambda sev: ["Low", "Medium", "High", "Critical"].index(sev),
+                    ),
+                    "steps": [
+                        "Reduce public exposure of application services.",
+                        "Harden privileged access services such as SSH or RDP.",
+                        "Prioritize controls that break lateral movement opportunities.",
+                    ],
+                }
+            )
 
-    # Sort paths by severity (assume higher CVSS first)
-    paths.sort(key=lambda p: max(v.cvss_score for v in vulns if v.host in p["description"]), reverse=True)
     return paths

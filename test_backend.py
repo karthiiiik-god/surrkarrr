@@ -1,149 +1,167 @@
-import sys
 import os
-sys.path.insert(0, os.path.dirname(__file__))
+import tempfile
+import unittest
+from hashlib import sha256
 
-from core.storage.models import Vulnerability
-from core.storage.database import Database
-from core.scanner_ingestion import nmap_parser, nessus_parser, openvas_parser, nikto_parser
-from core.normalization import cve_mapper, deduplicator, schema
-from core.risk_engine import cvss_calculator, severity_ranker, false_positive_filter
-from core.ai_query import nlp_parser, intent_classifier, query_executor
+from core.ai_query.query_executor import QueryExecutor
+from core.normalization.normalizer import normalize_vulnerabilities
 from core.reporting.report_generator import generate_report
-import uuid
-import datetime
+from core.scanner.live_scanner import build_scan_command, preview_scan_command, validate_target
+from core.scanner_ingestion.nessus_parser import parse_nessus
+from core.scanner_ingestion.nikto_parser import parse_nikto
+from core.scanner_ingestion.nmap_parser import parse_nmap
+from core.scanner_ingestion.nuclei_parser import parse_nuclei
+from core.scanner_ingestion.openvas_parser import parse_openvas
+from core.storage.database import Database
+from core.storage.models import Asset, ReportSnapshot, ScanJob
 
-def test_database():
-    print("Testing Database CRUD...")
-    db = Database(":memory:")  # Use in-memory for testing
-    vuln = Vulnerability(
-        id=str(uuid.uuid4()),
-        host="192.168.1.1",
-        port=80,
-        service="http",
-        vulnerability_name="Test Vuln",
-        description="Test description",
-        cve_id="CVE-2023-1234",
-        cvss_score=7.5,
-        severity="High",
-        source_tools=["nmap"],
-        timestamp=datetime.datetime.now().isoformat()
-    )
-    db.insert_vulnerability(vuln)
-    retrieved = db.get_vulnerability(vuln.id)
-    assert retrieved is not None and retrieved.id == vuln.id
-    vuln.cvss_score = 8.0
-    db.update_vulnerability(vuln)
-    updated = db.get_vulnerability(vuln.id)
-    assert updated.cvss_score == 8.0
-    db.delete_vulnerability(vuln.id)
-    assert db.get_vulnerability(vuln.id) is None
-    print("Database CRUD tests passed.")
 
-def test_parsers():
-    print("Testing Parsers...")
-    # Nmap sample
-    nmap_xml = '''<?xml version="1.0"?>
-<nmaprun>
-<host><address addr="192.168.1.1"/><ports><port portid="80"><service name="http"/><script id="vuln"><output>CVE-2023-1234 7.5 Vulnerability found</output></script></port></ports></host>
-</nmaprun>'''
-    nmap_vulns = nmap_parser.parse_nmap(nmap_xml)
-    assert len(nmap_vulns) > 0
-    assert nmap_vulns[0].cve_id == "CVE-2023-1234"
+class BackendSmokeTests(unittest.TestCase):
+    @staticmethod
+    def _read(path):
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
 
-    # Nessus sample (simplified)
-    nessus_xml = '''<?xml version="1.0"?>
-<NessusClientData_v2><Report><ReportHost name="192.168.1.1"><ReportItem port="80" svc_name="http" pluginName="Test Plugin" severity="3"><cvss_base_score>7.5</cvss_base_score><cve>CVE-2023-1234</cve><description>Test desc</description></ReportItem></ReportHost></Report></NessusClientData_v2>'''
-    nessus_vulns = nessus_parser.parse_nessus(nessus_xml)
-    assert len(nessus_vulns) > 0
+    def setUp(self):
+        self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+        self.temp_db.close()
+        self.db = Database(self.temp_db.name)
+        self.db.create_user("admin", sha256("admin123".encode("utf-8")).hexdigest(), "admin", full_name="Admin User")
 
-    # OpenVAS sample
-    openvas_xml = '''<?xml version="1.0"?>
-<report><results><result><host>192.168.1.1</host><port>80/tcp</port><nvt><name>Test NVT</name><cvss_base>7.5</cvss_base><cve>CVE-2023-1234</cve><description>Test desc</description></nvt><threat>High</threat></result></results></report>'''
-    openvas_vulns = openvas_parser.parse_openvas(openvas_xml)
-    assert len(openvas_vulns) > 0
+    def tearDown(self):
+        self.db.close()
+        os.unlink(self.temp_db.name)
 
-    # Nikto JSON sample
-    nikto_json = '''[{"host": "192.168.1.1", "port": 80, "msg": "Test finding", "cve": "CVE-2023-1234", "cvss": 7.5}]'''
-    nikto_vulns = nikto_parser.parse_nikto(nikto_json)
-    assert len(nikto_vulns) > 0
+    def test_database_crud(self):
+        vuln = normalize_vulnerabilities(parse_nmap(self._read("sample_nmap.xml")))[0]
+        self.db.insert_vulnerability(vuln)
 
-    print("Parser tests passed.")
+        fetched = self.db.get_vulnerability(vuln.vuln_id)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched.vuln_id, vuln.vuln_id)
+        self.assertIsNotNone(fetched.asset_id)
 
-def test_normalization():
-    print("Testing Normalization...")
-    vuln1 = Vulnerability(id="1", host="h", port=80, service="s", vulnerability_name="v", description="d", cve_id="cve-2023-1234", cvss_score=7.5, severity="High", source_tools=["nmap"], timestamp="t")
-    vuln2 = cve_mapper.map_cve(vuln1)
-    assert vuln2.cve_id == "CVE-2023-1234"
+        fetched.severity = "Critical"
+        self.db.update_vulnerability(fetched)
+        self.assertEqual(self.db.get_vulnerability(vuln.vuln_id).severity, "Critical")
 
-    vuln3 = Vulnerability(id="2", host="h", port=80, service="s", vulnerability_name="v", description="d", cve_id="CVE-2023-1234", cvss_score=8.0, severity="High", source_tools=["nessus"], timestamp="t")
-    deduped = deduplicator.deduplicate_vulnerabilities([vuln1, vuln3])
-    assert len(deduped) == 1
-    assert deduped[0].cvss_score == 8.0  # Higher score
-    assert "nmap" in deduped[0].source_tools and "nessus" in deduped[0].source_tools
+        self.db.delete_vulnerability(vuln.vuln_id)
+        self.assertIsNone(self.db.get_vulnerability(vuln.vuln_id))
 
-    assert schema.validate_vulnerability(vuln1)
-    print("Normalization tests passed.")
+    def test_parsers(self):
+        nmap_vulns = parse_nmap(self._read("sample_nmap.xml"))
+        nessus_vulns = parse_nessus(self._read("sample_nessus.nessus"))
+        openvas_vulns = parse_openvas(
+            """<?xml version="1.0"?>
+            <report><results><result><host>192.168.1.10</host><port>443/tcp</port>
+            <nvt><name>Sample OpenVAS</name><cvss_base>7.5</cvss_base><cve>CVE-2023-0001</cve>
+            <description>Sample description</description></nvt></result></results></report>"""
+        )
+        nikto_vulns = parse_nikto(
+            '[{"host": "192.168.1.20", "port": 80, "msg": "Nikto finding", "cve": "CVE-2023-0002", "cvss": 5.0}]'
+        )
+        nuclei_vulns = parse_nuclei(
+            '{"template-id":"test-template","matched-at":"https://example.com/login","info":{"severity":"high","description":"Test nuclei finding","reference":["https://example.com/advisory"]}}'
+        )
 
-def test_risk_engine():
-    print("Testing Risk Engine...")
-    vuln = Vulnerability(id="1", host="h", port=80, service="s", vulnerability_name="v", description="d", cve_id=None, cvss_score=0.0, severity="Low", source_tools=["nmap"], timestamp="t")
-    cvss = cvss_calculator.calculate_cvss_fallback(vuln)
-    assert cvss == 2.0  # Low severity fallback
+        self.assertGreaterEqual(len(nmap_vulns), 1)
+        self.assertGreaterEqual(len(nessus_vulns), 1)
+        self.assertEqual(len(openvas_vulns), 1)
+        self.assertEqual(len(nikto_vulns), 1)
+        self.assertEqual(len(nuclei_vulns), 1)
 
-    severity = severity_ranker.classify_severity(7.5)
-    assert severity == "High"
+    def test_assets_and_reports(self):
+        asset = Asset.new(
+            target="example.com",
+            display_name="Example External",
+            owner_username="admin",
+            environment="production",
+            criticality="High",
+            tags="internet-facing, critical",
+        )
+        saved_asset = self.db.upsert_asset(asset)
+        self.assertEqual(self.db.get_asset(saved_asset.asset_id).target, "example.com")
 
-    vulns = [
-        Vulnerability(id="1", host="h", port=80, service="s", vulnerability_name="v", description="d", cve_id=None, cvss_score=9.0, severity="Critical", source_tools=["nmap"], timestamp="t"),
-        Vulnerability(id="2", host="h", port=80, service="s", vulnerability_name="v", description="d", cve_id=None, cvss_score=7.0, severity="High", source_tools=["nmap"], timestamp="t")
-    ]
-    ranked = severity_ranker.rank_vulnerabilities(vulns)
-    assert ranked[0].cvss_score == 9.0
+        snapshot = ReportSnapshot.new(
+            title="Weekly Summary",
+            format_type="markdown",
+            content="# Weekly Summary\nEverything looks good.",
+            created_by="admin",
+        )
+        self.db.save_report_snapshot(snapshot)
+        self.assertEqual(len(self.db.list_report_snapshots(username="admin", role="admin")), 1)
 
-    filtered = false_positive_filter.filter_false_positives(vulns)
-    assert len(filtered) == 2  # No false positives here
-    print("Risk Engine tests passed.")
+    def test_normalization_reporting_and_summary(self):
+        normalized = normalize_vulnerabilities(parse_nmap(self._read("sample_nmap.xml")))
+        for vuln in normalized:
+            self.db.insert_vulnerability(vuln)
+        self.assertGreaterEqual(len(normalized), 1)
+        self.assertTrue(all(vuln.risk_score >= vuln.cvss_score for vuln in normalized))
 
-def test_ai_query():
-    print("Testing AI Query...")
-    filters = nlp_parser.parse_query("Critical vulnerabilities on port 22")
-    assert filters.get("severity") == "Critical"
-    assert filters.get("port") == 22
+        report = generate_report(normalized, "markdown")
+        self.assertIn("SurrKarr Vulnerability Report", report)
 
-    intent = intent_classifier.classify_intent("Top risky hosts")
-    assert intent == "top_hosts"
+        pdf_report = generate_report(normalized, "pdf")
+        self.assertIsInstance(pdf_report, bytes)
 
-    # Mock db for query_executor
-    class MockDB:
-        def get_all_vulnerabilities(self):
-            return [
-                Vulnerability(id="1", host="192.168.1.1", port=22, service="ssh", vulnerability_name="SSH Vuln", description="d", cve_id=None, cvss_score=9.0, severity="Critical", source_tools=["nmap"], timestamp="t")
-            ]
+        summary = self.db.get_summary("admin", "admin")
+        self.assertGreaterEqual(summary["unique_assets"], 1)
 
-    db = MockDB()
-    result = query_executor.execute_query("Critical vulnerabilities", db)
-    assert result["intent"] == "list_vulnerabilities"
-    assert len(result["results"]) == 1
-    print("AI Query tests passed.")
+    def test_query_executor(self):
+        normalized = normalize_vulnerabilities(parse_nmap(self._read("sample_nmap.xml")))
+        for vuln in normalized:
+            self.db.insert_vulnerability(vuln)
+        self.db.save_report_snapshot(
+            ReportSnapshot.new(
+                title="Log4j Report",
+                format_type="markdown",
+                content="This report references CVE-2021-44228 and web exposure.",
+                created_by="admin",
+            )
+        )
 
-def test_reporting():
-    print("Testing Reporting...")
-    vulns = [
-        Vulnerability(id="1", host="h", port=80, service="s", vulnerability_name="v", description="d", cve_id=None, cvss_score=9.0, severity="Critical", source_tools=["nmap"], timestamp="t")
-    ]
-    md_report = generate_report(vulns, "markdown")
-    assert "Total Vulnerabilities: 1" in md_report
-    assert "Critical: 1" in md_report
+        executor = QueryExecutor(self.db, "admin", "admin")
+        filtered = executor.execute_query("Critical vulnerabilities")
+        top_hosts = executor.execute_query("Top risky hosts")
+        risk_paths = executor.execute_query("Attack path for ssh")
+        report_lookup = executor.execute_query("report summary log4j")
 
-    pdf_report = generate_report(vulns, "pdf")
-    assert isinstance(pdf_report, bytes)
-    print("Reporting tests passed.")
+        self.assertEqual(filtered["mode"], "vulnerabilities")
+        self.assertEqual(top_hosts["mode"], "hosts")
+        self.assertEqual(risk_paths["mode"], "paths")
+        self.assertEqual(report_lookup["mode"], "documents")
+
+    def test_scan_job_and_command_helpers(self):
+        asset = self.db.ensure_asset("example.com", owner_username="admin", tags="lab")
+        job = ScanJob.new(
+            scanner="nmap",
+            mode="live",
+            target="example.com",
+            profile="Quick Discovery",
+            status="Running",
+            asset_id=asset.asset_id,
+            created_by="admin",
+        )
+        self.db.create_scan_job(job)
+        self.db.update_scan_job(job.id, status="Completed", findings_count=3, finished_at="done")
+        jobs = self.db.list_scan_jobs(limit=5, username="admin", role="admin")
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["status"], "Completed")
+
+        self.assertEqual(validate_target("example.com"), "example.com")
+        preview = preview_scan_command("nmap", "example.com", "Quick Discovery")
+        command = build_scan_command(
+            "nikto",
+            "example.com",
+            "Baseline Web Audit",
+            output_path="scan.txt",
+            extra_args=[],
+        )
+
+        self.assertIn("nmap", preview)
+        self.assertEqual(command[0], "nikto")
+
 
 if __name__ == "__main__":
-    test_database()
-    test_parsers()
-    test_normalization()
-    test_risk_engine()
-    test_ai_query()
-    test_reporting()
-    print("All backend tests passed!")
+    unittest.main()

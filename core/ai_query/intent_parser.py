@@ -1,20 +1,11 @@
 import re
-from typing import Dict, Any
+from typing import Any
 
-def parse_intent(query: str) -> Dict[str, Any]:
-    """
-    Parse natural language query into intent and filters using rule-based approach.
-    Supported queries:
-    - “Critical vulnerabilities”
-    - “Vulnerabilities on port 22”
-    - “CVEs above CVSS 8”
-    - “Top risky hosts”
-    - “Attack path for SSH”
-    """
-    filters = {}
+
+def parse_intent(query: str) -> dict[str, Any]:
+    filters: dict[str, Any] = {}
     query_lower = query.lower()
 
-    # Severity filters
     if "critical" in query_lower:
         filters["severity"] = "Critical"
     elif "high" in query_lower:
@@ -24,13 +15,11 @@ def parse_intent(query: str) -> Dict[str, Any]:
     elif "low" in query_lower:
         filters["severity"] = "Low"
 
-    # Port filter
-    port_match = re.search(r'port (\d+)', query_lower)
+    port_match = re.search(r"port (\d+)", query_lower)
     if port_match:
         filters["port"] = int(port_match.group(1))
 
-    # CVSS score filter
-    cvss_match = re.search(r'cvss (\d+(?:\.\d+)?)', query_lower)
+    cvss_match = re.search(r"cvss (\d+(?:\.\d+)?)", query_lower)
     if cvss_match:
         cvss_value = float(cvss_match.group(1))
         if "above" in query_lower or "greater" in query_lower:
@@ -40,28 +29,38 @@ def parse_intent(query: str) -> Dict[str, Any]:
         else:
             filters["cvss_min"] = cvss_value
 
-    # Host filter
-    host_match = re.search(r'host (\S+)', query_lower)
+    host_match = re.search(r"(?:host|asset|target) (\S+)", query_lower)
     if host_match:
         filters["host"] = host_match.group(1)
 
-    # CVE filter
-    cve_match = re.search(r'cve[- ](\d{4}[-]\d{4,})', query_lower)
+    cve_match = re.search(r"cve[- ](\d{4}[-]\d{4,})", query_lower)
     if cve_match:
         filters["cve_id"] = f"CVE-{cve_match.group(1)}"
 
-    # Service filter
-    service_match = re.search(r'service (\w+)', query_lower)
+    service_match = re.search(r"service (\w+)", query_lower)
     if service_match:
         filters["service"] = service_match.group(1)
 
-    # Special intents
-    if "top risky hosts" in query_lower:
+    owner_match = re.search(r"owner (\w+)", query_lower)
+    if owner_match:
+        filters["owner"] = owner_match.group(1)
+
+    tag_match = re.search(r"tag (\w+)", query_lower)
+    if tag_match:
+        filters["tag"] = tag_match.group(1)
+
+    if "top risky hosts" in query_lower or "top risky assets" in query_lower:
         filters["intent"] = "top_risky_hosts"
     elif "attack path" in query_lower:
-        service_match = re.search(r'attack path for (\w+)', query_lower)
+        service_match = re.search(r"attack path for (\w+)", query_lower)
+        filters["intent"] = "attack_path"
         if service_match:
-            filters["intent"] = "attack_path"
             filters["service"] = service_match.group(1)
+    elif "asset" in query_lower and ("owner" in query_lower or "tag" in query_lower or "inventory" in query_lower):
+        filters["intent"] = "asset_lookup"
+    elif "report" in query_lower or "summary" in query_lower or "snapshot" in query_lower:
+        filters["intent"] = "report_lookup"
+    else:
+        filters["intent"] = "semantic_search"
 
     return filters

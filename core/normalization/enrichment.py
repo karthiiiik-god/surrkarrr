@@ -1,40 +1,68 @@
+from __future__ import annotations
+
+from ..risk_engine.attack_path_generator import summarize_risk_path
+from ..risk_engine.rule_based_risk import assess_risk
 from ..storage.models import Vulnerability
 
-# Static offline CVE data (simulated NVD-style)
+
 STATIC_CVE_DATA = {
     "CVE-2021-44228": {
-        "description": "Apache Log4j2 remote code execution vulnerability",
-        "exploit_available": True,
-        "network_exposed": True,
-        "authentication_required": False,
-        "attack_complexity": "Low"
+        "description": "Apache Log4j remote code execution exposure affecting internet-facing services.",
+        "cvss": 10.0,
+        "epss": 0.97,
+        "references": "NVD; vendor advisories",
+        "remediation": "Upgrade Log4j to a fixed version and remove vulnerable JndiLookup usage.",
+    },
+    "CVE-2018-15473": {
+        "description": "OpenSSH username enumeration issue that can support reconnaissance against SSH services.",
+        "cvss": 5.0,
+        "epss": 0.23,
+        "references": "NVD; OpenSSH advisory",
+        "remediation": "Upgrade OpenSSH and restrict unnecessary SSH exposure.",
     },
     "CVE-2017-0144": {
-        "description": "EternalBlue SMB vulnerability",
-        "exploit_available": True,
-        "network_exposed": True,
-        "authentication_required": False,
-        "attack_complexity": "Low"
+        "description": "SMB remote code execution issue commonly known as EternalBlue.",
+        "cvss": 9.8,
+        "epss": 0.95,
+        "references": "NVD; Microsoft advisory",
+        "remediation": "Apply MS17-010, disable SMBv1, and segment exposed Windows assets.",
     },
-    # Add more as needed
 }
 
-async def enrich_vulnerability(vuln: Vulnerability) -> Vulnerability:
-    """
-    Enrich vulnerability with NVD/EPSS API data.
-    """
-    nvd_fetcher = NVDFetcher()
-    
-    if vuln.cve_id:
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                vuln = await nvd_fetcher.enrich_vuln(vuln)
-        except:
-            # Fallback
-            vuln.exploit_likelihood = 0.05
-    
-    # Rule-based
-    vuln.network_exposed = vuln.port in [80, 443, 22, 3389]
-    
-    return vuln
 
+def _default_remediation(vuln: Vulnerability) -> str:
+    if vuln.port in (80, 443):
+        return "Patch the web stack, validate exposed components, and restrict public access where possible."
+    if vuln.port == 22:
+        return "Restrict SSH exposure, enforce strong authentication, and patch the service version."
+    if vuln.port == 3389:
+        return "Limit RDP exposure, require MFA or VPN access, and patch the remote access service."
+    return "Patch the affected service, validate compensating controls, and retest after remediation."
+
+
+def enrich_vulnerability(vuln: Vulnerability) -> Vulnerability:
+    """
+    Apply lightweight offline-safe enrichment so the pipeline stays runnable
+    even when external threat intelligence lookups are unavailable.
+    """
+    if vuln.cve_id:
+        cve_id = vuln.cve_id.strip().upper()
+        vuln.cve_id = cve_id
+        if cve_id in STATIC_CVE_DATA:
+            data = STATIC_CVE_DATA[cve_id]
+            vuln.nvd_description = data["description"]
+            vuln.cvss_score = max(float(vuln.cvss_score), float(data["cvss"]))
+            vuln.epss_score = max(float(vuln.epss_score), float(data["epss"]))
+            vuln.references = data["references"]
+            vuln.remediation = data["remediation"]
+
+    if not vuln.nvd_description:
+        vuln.nvd_description = vuln.description
+    if not vuln.references:
+        vuln.references = "Local parser evidence"
+    if not vuln.remediation:
+        vuln.remediation = _default_remediation(vuln)
+
+    vuln.attack_path = summarize_risk_path(vuln)
+    assess_risk(vuln)
+    return vuln

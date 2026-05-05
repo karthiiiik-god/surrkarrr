@@ -1,94 +1,79 @@
-import json
-from typing import List
-from ..storage.models import Vulnerability
-import uuid
-import datetime
+from __future__ import annotations
 
-def parse_nikto(content: str) -> List[Vulnerability]:
-    vulnerabilities = []
+import json
+import re
+
+from ..storage.models import Vulnerability
+
+
+def _severity_from_cvss(cvss_score: float) -> str:
+    if cvss_score >= 9.0:
+        return "Critical"
+    if cvss_score >= 7.0:
+        return "High"
+    if cvss_score >= 4.0:
+        return "Medium"
+    return "Low"
+
+
+def parse_nikto(content: str) -> list[Vulnerability]:
+    vulnerabilities: list[Vulnerability] = []
     try:
-        # Try parsing as JSON
         data = json.loads(content)
-        if isinstance(data, list):
-            items = data
-        else:
-            items = data.get('vulnerabilities', [])
+        items = data if isinstance(data, list) else data.get("vulnerabilities", [])
         for item in items:
-            host = item.get('host', 'unknown')
-            port = item.get('port', 80)
-            service = item.get('service', 'http')
-            vuln_name = item.get('msg', 'Nikto finding')
-            description = item.get('msg', '')
-            cve_id = item.get('cve')
-            cvss_score = item.get('cvss', 0.0)
-            severity = "Low"
-            if cvss_score >= 9.0:
-                severity = "Critical"
-            elif cvss_score >= 7.0:
-                severity = "High"
-            elif cvss_score >= 4.0:
-                severity = "Medium"
-            vuln = Vulnerability(
-                id=str(uuid.uuid4()),
-                host=host,
-                port=port,
-                service=service,
-                vulnerability_name=vuln_name,
-                description=description,
-                cve_id=cve_id,
-                cvss_score=cvss_score,
-                severity=severity,
-                source_tools=["nikto"],
-                timestamp=datetime.datetime.now().isoformat()
+            cvss_score = float(item.get("cvss", 5.0) or 5.0)
+            port = int(item.get("port", 80))
+            description = item.get("msg", "Nikto finding")
+            vulnerabilities.append(
+                Vulnerability.new(
+                    host=item.get("host", "unknown"),
+                    port=port,
+                    service=item.get("service", "http"),
+                    vulnerability_name=item.get("msg", "Nikto finding"),
+                    description=description,
+                    cve_id=item.get("cve"),
+                    cvss_score=cvss_score,
+                    severity=_severity_from_cvss(cvss_score),
+                    source_tool="nikto",
+                    network_exposed=port in (80, 443, 22, 3389),
+                    authentication_required="auth" in description.lower(),
+                    exploit_available=cvss_score >= 7.0,
+                )
             )
-            vulnerabilities.append(vuln)
+        return vulnerabilities
     except json.JSONDecodeError:
-        # Parse as TXT
-        lines = content.split('\n')
-        current_host = 'unknown'
-        current_port = 80
-        for line in lines:
-            line = line.strip()
-            if line.startswith('+ Target IP:'):
-                current_host = line.split(':', 1)[1].strip()
-            elif line.startswith('+ Target Hostname:'):
-                current_host = line.split(':', 1)[1].strip()
-            elif line.startswith('+ Target Port:'):
-                try:
-                    current_port = int(line.split(':', 1)[1].strip())
-                except ValueError:
-                    current_port = 80
-            elif line.startswith('- ') and 'CVE-' in line:
-                parts = line[2:].split()
-                cve_id = None
-                for part in parts:
-                    if part.startswith('CVE-'):
-                        cve_id = part
-                        break
-                msg = ' '.join(parts)
-                vuln_name = f"Nikto: {msg}"
-                description = msg
-                cvss_score = 5.0  # Default CVSS for Nikto findings without score
-                severity = "Medium"
-                # Enrichment fields
-                network_exposed = current_port in [80, 443, 22, 3389]
-                authentication_required = "auth" in description.lower()
-                exploit_available = cvss_score >= 7.0
-                vuln = Vulnerability(
-                    vuln_id=str(uuid.uuid4()),
+        pass
+
+    current_host = "unknown"
+    current_port = 80
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if line.startswith("+ Target IP:") or line.startswith("+ Target Hostname:"):
+            current_host = line.split(":", 1)[1].strip()
+        elif line.startswith("+ Target Port:"):
+            try:
+                current_port = int(line.split(":", 1)[1].strip())
+            except ValueError:
+                current_port = 80
+        elif line.startswith("- "):
+            cve_match = re.search(r"(CVE-\d{4}-\d+)", line)
+            description = line[2:].strip()
+            vulnerabilities.append(
+                Vulnerability.new(
                     host=current_host,
                     port=current_port,
-                    service='http',
-                    vulnerability_name=vuln_name,
+                    service="http",
+                    vulnerability_name=f"Nikto: {description[:80]}",
                     description=description,
-                    cve_id=cve_id,
-                    cvss_score=cvss_score,
-                    severity=severity,
-                    network_exposed=network_exposed,
-                    authentication_required=authentication_required,
-                    exploit_available=exploit_available,
+                    cve_id=cve_match.group(1) if cve_match else None,
+                    cvss_score=5.0,
+                    severity="Medium",
                     source_tool="nikto",
-                    timestamp=datetime.datetime.now().isoformat()
+                    network_exposed=current_port in (80, 443, 22, 3389),
+                    authentication_required="auth" in description.lower(),
+                    exploit_available=False,
                 )
-                vulnerabilities.append(vuln)
+            )
+
     return vulnerabilities
